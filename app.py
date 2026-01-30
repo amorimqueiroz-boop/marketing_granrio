@@ -1,44 +1,63 @@
 import streamlit as st
+import sqlite3
 import base64
+import pandas as pd
 from openai import OpenAI
+from urllib.parse import quote
+from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 from rembg import remove
 import io
 import requests
 
-# --- 1. CONFIGURAÇÃO VISUAL ---
-st.set_page_config(page_title="Studio Granrio Pro", page_icon="🏗️", layout="centered")
+# --- 1. CONFIGURAÇÃO GERAL ---
+st.set_page_config(page_title="Gestor Granrio", page_icon="🏗️", layout="centered")
 
+# CSS para ficar bonito no celular
 st.markdown("""
     <style>
-    .stApp {background-color: #0e1117;}
-    h1 {color: #fff;}
+    .stApp {background-color: #f8f9fa;}
     .stButton>button {
-        width: 100%; border-radius: 12px; height: 50px; 
-        font-weight: bold; font-size: 18px;
-        background: linear-gradient(90deg, #004aad 0%, #0078d4 100%);
-        border: none; color: white;
+        width: 100%; border-radius: 10px; height: 3.5em; 
+        font-weight: bold; background-color: #004aad; color: white; border: none;
     }
+    div[data-testid="stButton"] > button[kind="secondary"] {
+        background-color: #e11d48 !important; color: white !important;
+    }
+    .stTextInput>div>div>input {border-radius: 10px;}
+    h1, h2, h3 {color: #0f172a;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. API SETUP ---
+# --- 2. BANCO DE DADOS (Unificado) ---
+def init_db():
+    conn = sqlite3.connect("loja_granrio_full.db", check_same_thread=False)
+    c = conn.cursor()
+    # Tabela de Clientes VIP
+    c.execute('CREATE TABLE IF NOT EXISTS vip (nome TEXT, celular TEXT)')
+    # Tabela de Histórico (Posts e Imagens)
+    c.execute('CREATE TABLE IF NOT EXISTS historico (data TEXT, tipo TEXT, conteudo TEXT)')
+    conn.commit()
+    return conn
+
+conn = init_db()
+
+# --- 3. INTEGRAÇÃO OPENAI ---
 try:
     api_key = st.secrets["OPENAI_API_KEY"]
 except:
     api_key = "SUA_CHAVE_AQUI"
 client = OpenAI(api_key=api_key)
 
-# --- 3. FUNÇÕES DE ELITE (O MOTOR) ---
+# --- 4. FUNÇÕES DO STUDIO MAGIC (O "Photoroom" Local) ---
 
-def remover_fundo(input_image):
-    # Usa IA para recortar o produto
+def remover_fundo_ia(input_image):
+    # Usa a biblioteca rembg para recortar o produto
     return remove(input_image)
 
-def gerar_fundo_ia(descricao_cenario):
-    # DALL-E 3 gera APENAS o fundo (sem produto)
-    prompt = f"Background image only, no products, no text. {descricao_cenario}. Bokeh effect, professional photography lighting, blurred background, high resolution."
-    
+def gerar_cenario_dalle(descricao_cenario):
+    # Pede ao DALL-E apenas o fundo
+    prompt = f"Background image only, no products in center. {descricao_cenario}. Bokeh effect, professional architectural photography lighting, blurred background, high resolution, 8k."
     response = client.images.generate(
         model="dall-e-3",
         prompt=prompt,
@@ -46,126 +65,170 @@ def gerar_fundo_ia(descricao_cenario):
         quality="standard",
         n=1,
     )
-    image_url = response.data[0].url
-    # Baixa a imagem gerada
-    img_data = requests.get(image_url).content
+    img_data = requests.get(response.data[0].url).content
     return Image.open(io.BytesIO(img_data))
 
-def montar_imagem_final(fundo, produto_sem_fundo, texto_preco):
-    # Redimensiona fundo para garantir 1024x1024
+def compor_imagem_final(fundo, produto_recortado, texto_preco):
     fundo = fundo.resize((1024, 1024))
     
-    # Ajusta o tamanho do produto para caber bem no cenário
-    # Mantém a proporção
-    largura_prod, altura_prod = produto_sem_fundo.size
-    aspect_ratio = largura_prod / altura_prod
+    # Ajusta proporção do produto
+    largura_orig, altura_orig = produto_recortado.size
+    ratio = largura_orig / altura_orig
     
-    nova_altura = 700 # Ocupa boa parte da imagem verticalmente
-    nova_largura = int(nova_altura * aspect_ratio)
+    # Define tamanho do produto na cena (70% da altura)
+    nova_altura = 750
+    nova_largura = int(nova_altura * ratio)
     
-    produto_resized = produto_sem_fundo.resize((nova_largura, nova_altura))
+    # Redimensiona o produto recortado
+    produto_final = produto_recortado.resize((nova_largura, nova_altura))
     
-    # Centraliza o produto no fundo
+    # Centraliza
     pos_x = (1024 - nova_largura) // 2
-    pos_y = (1024 - nova_altura) // 2 + 50 # Um pouco para baixo
+    pos_y = (1024 - nova_altura) // 2 + 50 
     
-    # Cola o produto sobre o fundo (usando a máscara de transparência)
-    fundo.paste(produto_resized, (pos_x, pos_y), produto_resized)
+    # Cola o produto no fundo
+    fundo.paste(produto_final, (pos_x, pos_y), produto_final)
     
-    # Adiciona o Preço (Design Premium)
+    # Adiciona a etiqueta de preço
     draw = ImageDraw.Draw(fundo)
-    
-    # Carrega fonte (ou default)
     try:
-        font_preco = ImageFont.truetype("arial.ttf", 120)
-        font_moeda = ImageFont.truetype("arial.ttf", 60)
+        font_p = ImageFont.truetype("arial.ttf", 100)
     except:
-        font_preco = ImageFont.load_default()
-        font_moeda = ImageFont.load_default()
+        font_p = ImageFont.load_default()
+        
+    # Desenha bolha vermelha
+    x_bolha, y_bolha = 850, 900
+    r = 120
+    draw.ellipse([(x_bolha-r, y_bolha-r), (x_bolha+r, y_bolha+r)], fill="#dc2626", outline="white", width=5)
     
-    # Bolha de Preço
-    x_tag = 750
-    y_tag = 850
-    raio = 130
-    draw.ellipse([(x_tag-raio, y_tag-raio), (x_tag+raio, y_tag+raio)], fill="#e11d48", outline="white", width=8)
-    
-    draw.text((x_tag-60, y_tag-80), "R$", font=font_moeda, fill="white")
-    draw.text((x_tag-90, y_tag-20), texto_preco, font=font_preco, fill="white")
+    # Texto do preço
+    w = draw.textlength(texto_preco, font=font_p)
+    draw.text((x_bolha - w/2, y_bolha - 50), texto_preco, font=font_p, fill="white")
     
     return fundo
 
-# --- 4. INTERFACE ---
-st.title("🏗️ Studio Granrio Pro")
-st.write("Transforme fotos simples em anúncios de revista.")
+# --- 5. INTERFACE PRINCIPAL ---
+st.title("🏗️ Gestor Granrio")
 
-# Passo 1: Captura
-img_file = st.camera_input("1. Tire a foto do produto (Fundo não importa)")
+# Variáveis de Estado (Memória do App)
+if 'img_final' not in st.session_state: st.session_state['img_final'] = None
+if 'legenda_final' not in st.session_state: st.session_state['legenda_final'] = None
 
-if img_file:
-    # Mostra progresso visual
-    col1, col2, col3 = st.columns(3)
+# Abas com todas as funções
+tab_studio, tab_agenda, tab_vip, tab_hist = st.tabs(["📸 Studio Magic", "📅 Agenda", "👥 Lista VIP", "📊 Controle"])
+
+# --- ABA 1: STUDIO MAGIC (Foto -> Recorte -> Fundo -> Post) ---
+with tab_studio:
+    st.subheader("Transformar Foto Real em Premium")
     
-    with st.spinner("🚀 Processando imagem..."):
-        # Carrega imagem original
-        input_img = Image.open(img_file)
+    foto_input = st.camera_input("Tire a foto (Não importa o fundo)")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        preco = st.text_input("Preço:", value="R$ 99,90")
+    with col2:
+        cenario = st.selectbox("Escolha o Cenário:", [
+            "Banheiro de Luxo (Mármore)",
+            "Obra Limpa e Iluminada",
+            "Jardim com Sol",
+            "Cozinha Planejada Moderna",
+            "Estúdio Fundo Infinito Azul"
+        ])
+    
+    if foto_input and st.button("✨ Criar Mágica (Recortar + Gerar Fundo)"):
+        img_pil = Image.open(foto_input)
         
-        # ETAPA A: REMOVER FUNDO
-        with col1:
-            st.image(input_img, caption="Original", use_column_width=True)
+        # Passo 1: Recorte
+        with st.spinner("✂️ Recortando fundo feio..."):
+            prod_sem_fundo = remover_fundo_ia(img_pil)
             
-        with st.spinner("✂️ Recortando fundo com IA..."):
-            produto_png = remover_fundo(input_img)
-            with col2:
-                st.image(produto_png, caption="Recortado", use_column_width=True)
-
-    # Passo 2: Configuração do Cenário
-    st.write("---")
-    st.subheader("2. Escolha o Cenário")
-    
-    cenario_opcao = st.selectbox(
-        "Onde esse produto deve aparecer?",
-        [
-            "Banheiro de Luxo (Mármore Claro)",
-            "Obra em Construção (Clean)",
-            "Jardim Externo com Sol",
-            "Fundo Azul Profissional (Estúdio)",
-            "Cozinha Moderna Planejada"
-        ]
-    )
-    
-    preco = st.text_input("Preço (Só o número):", value="99")
-    
-    if st.button("✨ GERAR IMAGEM FINAL"):
-        with st.spinner("🎨 O DALL-E está pintando o cenário e montando a foto..."):
+        # Passo 2: Gerar Fundo (DALL-E)
+        with st.spinner(f"🎨 Pintando cenário: {cenario}..."):
+            # Traduz cenário para prompt em inglês pro DALL-E entender melhor
+            prompts = {
+                "Banheiro de Luxo (Mármore)": "Luxury bathroom white marble counter",
+                "Obra Limpa e Iluminada": "Clean construction site concrete daylight",
+                "Jardim com Sol": "Beautiful sunny garden green grass",
+                "Cozinha Planejada Moderna": "Modern kitchen granite counter",
+                "Estúdio Fundo Infinito Azul": "Abstract professional dark blue studio background"
+            }
+            fundo_ia = gerar_cenario_dalle(prompts[cenario])
             
-            # Define o prompt do cenário baseado na escolha
-            if "Banheiro" in cenario_opcao: prompt_cenario = "Luxury bright bathroom with white marble counter, blurred background"
-            elif "Obra" in cenario_opcao: prompt_cenario = "Clean construction site, soft daylight, blurred concrete background"
-            elif "Jardim" in cenario_opcao: prompt_cenario = "Beautiful garden with green grass and sunlight, blurred background"
-            elif "Cozinha" in cenario_opcao: prompt_cenario = "Modern kitchen counter, granite surface, blurred background"
-            else: prompt_cenario = "Professional abstract dark blue studio background with spotlight"
+        # Passo 3: Montagem
+        with st.spinner("🔨 Montando imagem final..."):
+            img_composta = compor_imagem_final(fundo_ia, prod_sem_fundo, preco)
+            st.session_state['img_final'] = img_composta
             
-            # ETAPA B: GERAR FUNDO
-            fundo_ia = gerar_fundo_ia(prompt_cenario)
+        # Passo 4: Legenda (GPT-4o)
+        with st.spinner("✍️ Escrevendo legenda..."):
+            # Converte a imagem final para mandar pro GPT ver
+            buf = io.BytesIO(); img_composta.save(buf, format="PNG")
+            b64_img = base64.b64encode(buf.getvalue()).decode('utf-8')
             
-            # ETAPA C: MONTAR
-            imagem_final = montar_imagem_final(fundo_ia, produto_png, preco)
-            
-            st.success("Pronto!")
-            st.image(imagem_final, caption="Anúncio Final", use_column_width=True)
-            
-            # Botão de Download
-            buf = io.BytesIO()
-            imagem_final.save(buf, format="PNG")
-            st.download_button(
-                label="⬇️ Baixar Imagem para o Instagram",
-                data=buf.getvalue(),
-                file_name="granrio_post_pro.png",
-                mime="image/png"
+            res = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "Marketing Granrio Indiaporã. Texto curto e vendedor."},
+                    {"role": "user", "content": [{"type": "text", "text": f"Crie legenda para este produto. Preço {preco}."}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}]}
+                ]
             )
+            st.session_state['legenda_final'] = res.choices[0].message.content
             
-            # Sugestão de Legenda (Extra)
-            st.info("Dica: Copie a imagem acima e poste nos Stories!")
+            # Salva no histórico
+            conn.execute("INSERT INTO historico VALUES (?, ?, ?)", 
+                         (datetime.now().strftime("%d/%m %H:%M"), "Studio Magic", st.session_state['legenda_final']))
+            conn.commit()
+            st.rerun()
 
-else:
-    st.info("👆 Tire uma foto para começar a mágica.")
+    # Exibição do Resultado
+    if st.session_state['img_final']:
+        st.write("---")
+        st.image(st.session_state['img_final'], caption="Resultado Final", use_column_width=True)
+        
+        # Botão Download
+        buf_down = io.BytesIO()
+        st.session_state['img_final'].save(buf_down, format="PNG")
+        st.download_button("⬇️ Baixar Imagem", data=buf_down.getvalue(), file_name="granrio_magic.png", mime="image/png")
+        
+        txt = st.text_area("Legenda:", value=st.session_state['legenda_final'])
+        
+        # Enviar Zap
+        zap = st.text_input("Zap do Cliente:", key="zap_studio")
+        if st.button("📲 Enviar no WhatsApp"):
+            url = f"https://wa.me/55{zap}?text={quote(txt)}"
+            st.markdown(f"[CLIQUE PARA ENVIAR]({url})")
+
+# --- ABA 2: AGENDA INTELIGENTE ---
+with tab_agenda:
+    st.header("📅 Sugestão do Dia")
+    datas = {"30/01": "Dia da Saudade", "19/03": "Dia do Carpinteiro", "13/12": "Dia do Pedreiro"}
+    hoje = datetime.now().strftime("%d/%m")
+    
+    if hoje in datas:
+        st.success(f"Hoje é {datas[hoje]}! Aproveite.")
+    else:
+        st.info("Dia comum. Que tal uma dica de obra?")
+        
+    if st.button("💡 Gerar Ideia de Hoje"):
+        prompt = f"Crie um post para hoje ({hoje}) para loja de construção. Se tiver data especial, use. Senão, dê uma dica útil."
+        res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
+        st.text_area("Ideia:", value=res.choices[0].message.content, height=150)
+
+# --- ABA 3: LISTA VIP ---
+with tab_vip:
+    st.header("👥 Clientes VIP")
+    with st.form("vip_add"):
+        n = st.text_input("Nome")
+        c = st.text_input("Celular")
+        if st.form_submit_button("Salvar"):
+            conn.execute("INSERT INTO vip VALUES (?, ?)", (n, c)); conn.commit(); st.rerun()
+            
+    df = pd.read_sql_query("SELECT * FROM vip", conn)
+    st.dataframe(df, use_container_width=True)
+
+# --- ABA 4: CONTROLE ---
+with tab_hist:
+    st.header("📊 Histórico de Posts")
+    if st.button("Atualizar"): st.rerun()
+    df_h = pd.read_sql_query("SELECT * FROM historico ORDER BY data DESC", conn)
+    st.dataframe(df_h, use_container_width=True)
