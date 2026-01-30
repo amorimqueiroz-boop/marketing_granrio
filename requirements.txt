@@ -1,6 +1,5 @@
 streamlit
+requests
 openai
 pandas
 Pillow
-rembg
-onnxruntime
