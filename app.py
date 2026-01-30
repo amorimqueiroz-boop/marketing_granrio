@@ -8,10 +8,10 @@ from PIL import Image
 import io
 from urllib.parse import quote
 
-# --- 1. CONFIGURAÇÃO VISUAL (CORRIGIDO O ERRO DO MARKDOWN) ---
+# --- 1. CONFIGURAÇÃO VISUAL ---
 st.set_page_config(page_title="Gestor Granrio Pro", page_icon="🏗️", layout="centered")
 
-# AQUI ESTAVA O ERRO: Mudamos de 'unsafe_allow_index' para 'unsafe_allow_html'
+# Correção do erro visual (usando unsafe_allow_html)
 st.markdown("""
     <style>
     .stApp {background-color: #f8f9fa;}
@@ -24,21 +24,19 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. CARREGAMENTO SEGURO DE CHAVES ---
+# --- 2. CARREGAMENTO DAS CHAVES ---
 try:
-    # Busca as chaves configuradas nos Secrets
     PHOTOROOM_API_KEY = st.secrets["PHOTOROOM_API_KEY"]
     OPENAI_KEY = st.secrets["OPENAI_API_KEY"]
 except Exception as e:
-    st.error("⚠️ Erro nas Chaves de API. Verifique o arquivo secrets.toml")
+    st.error("⚠️ Erro: Chaves não encontradas no secrets.toml")
     st.stop()
 
-# Inicializa OpenAI
 client = OpenAI(api_key=OPENAI_KEY)
 
 # --- 3. BANCO DE DADOS ---
 def init_db():
-    conn = sqlite3.connect("granrio_pro_vfinal.db", check_same_thread=False)
+    conn = sqlite3.connect("granrio_final_v2.db", check_same_thread=False)
     c = conn.cursor()
     c.execute('CREATE TABLE IF NOT EXISTS vip (nome TEXT, celular TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS historico (data TEXT, tipo TEXT, conteudo TEXT)')
@@ -47,21 +45,20 @@ def init_db():
 
 conn = init_db()
 
-# --- 4. MOTOR VISUAL: PHOTOROOM (CORRIGIDO O ERRO 400) ---
+# --- 4. MOTOR VISUAL: PHOTOROOM (CORRIGIDO) ---
 def gerar_estudio_photoroom(image_bytes, prompt_cenario):
     url = "https://image-api.photoroom.com/v2/edit"
     
-    # CORREÇÃO CRÍTICA AQUI:
-    # Adicionamos o nome do arquivo ("produto.jpg") e o tipo ("image/jpeg")
-    # Isso resolve o erro "Couldn't find the argument imageFile"
+    # --- A CORREÇÃO ESTÁ AQUI EMBAIXO ---
+    # Mudamos de "image_file" para "imageFile" (Obrigatório pela API)
     files = {
-        "image_file": ("produto.jpg", image_bytes, "image/jpeg")
+        "imageFile": ("produto.jpg", image_bytes, "image/jpeg")
     }
     
     data = {
         "background.prompt": prompt_cenario,
-        "shadow.mode": "ai.soft",  # Cria sombra realista
-        "light.mode": "ai.auto",   # Ajusta a luz do produto
+        "shadow.mode": "ai.soft",  # Sombra realista
+        "light.mode": "ai.auto",   # Luz automática
         "padding": "0.1",
         "outputFormat": "png"
     }
@@ -79,28 +76,28 @@ def gerar_estudio_photoroom(image_bytes, prompt_cenario):
         st.error(f"Erro de conexão: {e}")
         return None
 
-# --- 5. INTERFACE DO APP ---
+# --- 5. INTERFACE ---
 st.title("🏗️ Gestor Granrio Pro")
 st.caption("Status: Conectado (Photoroom Live)")
 
-# Memória do App
+# Memória
 if 'img_final' not in st.session_state: st.session_state['img_final'] = None
 if 'legenda' not in st.session_state: st.session_state['legenda'] = ""
 
 tab_studio, tab_agenda, tab_vip, tab_hist = st.tabs(["📸 Studio Pro", "📅 Agenda", "👥 VIP", "📊 Controle"])
 
-# --- ABA 1: STUDIO PRO ---
+# --- ABA 1: STUDIO ---
 with tab_studio:
-    st.subheader("Transformar Foto com IA")
+    st.subheader("Estúdio Fotográfico IA")
     
     foto_input = st.camera_input("Tire a foto do produto")
     
     cenarios = {
-        "Banheiro de Luxo": "product on a white marble counter in a luxury bright bathroom, bokeh background, professional photography",
-        "Obra Limpa (Concreto)": "product placed on a polished concrete floor in a modern construction site, sunlight, soft shadows",
+        "Banheiro de Luxo": "product on a white marble counter in a luxury bright bathroom, bokeh background, high resolution",
+        "Obra Limpa": "product placed on a polished concrete floor in a modern construction site, sunlight, soft shadows",
         "Madeira Rústica": "product on a rustic wooden table, warm lighting, blurred background",
         "Cozinha Moderna": "product on a granite kitchen island, modern appliances in background blurred",
-        "Fundo Infinito Azul": "product on a professional dark blue studio background, spotlight, minimalist"
+        "Fundo Infinito Azul": "product on a professional dark blue studio background, spotlight"
     }
     
     col1, col2 = st.columns(2)
@@ -111,7 +108,7 @@ with tab_studio:
 
     if foto_input and st.button("✨ Gerar Foto de Estúdio"):
         
-        with st.spinner("Enviando para o Estúdio Profissional..."):
+        with st.spinner("Enviando para a Photoroom..."):
             img_bytes = foto_input.getvalue()
             # Chama a função corrigida
             imagem_gerada = gerar_estudio_photoroom(img_bytes, cenarios[cenario_escolhido])
@@ -125,11 +122,10 @@ with tab_studio:
                     try:
                         res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt_mkt}])
                         st.session_state['legenda'] = res.choices[0].message.content
-                    except Exception as e:
-                        st.warning(f"Erro ao gerar texto: {e}")
+                    except:
                         st.session_state['legenda'] = f"Oferta Granrio! Só R$ {preco}."
                     
-                    # Salva histórico
+                    # Salva
                     data_hoje = datetime.now().strftime("%d/%m %H:%M")
                     conn.execute("INSERT INTO historico VALUES (?, ?, ?)", (data_hoje, "Studio Pro", st.session_state['legenda']))
                     conn.commit()
@@ -159,7 +155,7 @@ with tab_agenda:
             res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": "Dê uma dica rápida de obra para postar hoje."}])
             st.info(res.choices[0].message.content)
         except:
-            st.error("Verifique a chave OpenAI.")
+            st.error("Verifique a chave OpenAI")
 
 # --- ABA 3: VIP ---
 with tab_vip:
