@@ -5,28 +5,32 @@ from openai import OpenAI
 from urllib.parse import quote
 from datetime import datetime
 
-# --- CONFIGURAÇÃO DO APP (MODO MOBILE) ---
+# --- 1. CONFIGURAÇÃO DO APP (INTERFACE PWA) ---
 st.set_page_config(
     page_title="Omnisfera Varejo - Indiaporã",
     page_icon="🏗️",
     layout="centered"
 )
 
-# Esconder menus para parecer App nativo
+# Injeção de CSS corrigida (Removido o erro unsafe_allow_index)
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
-    .stButton>button {width: 100%; border-radius: 10px;}
+    .stButton>button {
+        width: 100%; 
+        border-radius: 10px; 
+        height: 3em; 
+        font-weight: bold;
+    }
+    .stTextInput>div>div>input {border-radius: 10px;}
     </style>
-""", unsafe_allow_index=True)
+""", unsafe_allow_html=True)
 
-# --- INICIALIZAÇÃO ---
-client = OpenAI(api_key="SUA_CHAVE_API_AQUI")
-
+# --- 2. LÓGICA DE BANCO DE DADOS ---
 def init_db():
-    conn = sqlite3.connect("loja_indiapora.db")
+    conn = sqlite3.connect("loja_indiapora.db", check_same_thread=False)
     c = conn.cursor()
     c.execute('CREATE TABLE IF NOT EXISTS vip (nome TEXT, celular TEXT)')
     conn.commit()
@@ -34,90 +38,98 @@ def init_db():
 
 conn = init_db()
 
+# --- 3. SERVIÇOS DE IA (GPT-4o VISION) ---
+# Dica: No Streamlit Cloud, use st.secrets["OPENAI_API_KEY"]
+client = OpenAI(api_key="SUA_CHAVE_AQUI")
+
 def encode_image(image_file):
     return base64.b64encode(image_file.getvalue()).decode('utf-8')
 
-# --- PERSONA DE MARKETING (PROMPT DO SISTEMA) ---
 PERSONA_MARKETING = """
-Você é o braço direito de marketing de uma loja de materiais de construção em Indiaporã, interior de SP.
-Seu público são pessoas simples, pedreiros, caminhoneiros e donos de casa.
-Linguagem: Humilde, prestativa, usa o nome do cliente, evita termos técnicos difíceis.
-Foco: Preço justo, confiança de quem é da cidade e qualidade do material.
-Sempre inclua hashtags como #Indiapora #Reforma #Construcao #MaterialDeConstrucao.
+Você é um especialista em marketing para lojas de material de construção no interior de SP.
+Seu tom é simples, amigável e focado em confiança. Use gírias leves do interior se fizer sentido.
+Sempre identifique o produto da foto e sugira uma legenda para Instagram e WhatsApp.
+Inclua hashtags: #Indiapora #MaterialDeConstrucao #Reforma #Obra.
 """
 
-# --- UI PRINCIPAL ---
-st.title("🏗️ Marketing Omnisfera")
-tab1, tab2, tab3 = st.tabs(["📸 Novo Post", "👥 Lista VIP", "📅 Calendário"])
+# --- 4. INTERFACE PRINCIPAL (TABS) ---
+st.title("🏗️ Gestor Indiaporã")
 
-# --- TAB 1: GERADOR DE POST COM GPT-4O VISION ---
-with tab1:
-    st.subheader("Tire uma foto e crie o post")
-    foto = st.camera_input("Capturar Produto")
+tab_post, tab_vip, tab_agenda = st.tabs(["📸 Criar Post", "👥 Lista VIP", "📅 Datas"])
+
+# --- ABA 1: GERADOR VISUAL ---
+with tab_post:
+    st.subheader("Marketing Automático")
+    foto = st.camera_input("Tire a foto do produto")
     
-    preco_input = st.text_input("Preço de Venda (Opcional):", placeholder="Ex: R$ 29,90")
-    estilo = st.selectbox("Tom da mensagem:", ["Oferta Relâmpago", "Homenagem Profissional", "Dica de Reforma"])
+    preco = st.text_input("Preço Promocional (Opcional):", placeholder="Ex: R$ 49,90")
+    estilo = st.selectbox("Objetivo:", ["Oferta do Dia", "Dica Técnica", "Homenagem"])
 
     if foto:
-        if st.button("✨ Gerar Marketing com GPT-4o"):
-            with st.spinner('Analisando produto...'):
-                base64_img = encode_image(foto)
+        if st.button("✨ Gerar Post com GPT-4o"):
+            with st.spinner('Analisando imagem com GPT-4o...'):
+                img_base64 = encode_image(foto)
                 try:
                     res = client.chat.completions.create(
                         model="gpt-4o",
                         messages=[
                             {"role": "system", "content": PERSONA_MARKETING},
                             {"role": "user", "content": [
-                                {"type": "text", "text": f"Identifique este produto e crie um post para WhatsApp e Instagram. Preço: {preco_input}. Estilo: {estilo}."},
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
+                                {"type": "text", "text": f"Crie um post para este produto. Preço: {preco}. Estilo: {estilo}."},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"}}
                             ]}
                         ]
                     )
-                    st.session_state['legenda'] = res.choices[0].message.content
+                    st.session_state['legenda_atual'] = res.choices[0].message.content
                 except Exception as e:
-                    st.error(f"Erro: {e}")
+                    st.error(f"Erro na API: {e}")
 
-    if 'legenda' in st.session_state:
-        txt_final = st.text_area("Texto Gerado:", value=st.session_state['legenda'], height=250)
+    if 'legenda_atual' in st.session_state:
+        txt_editado = st.text_area("Legenda Gerada (Pode editar):", value=st.session_state['legenda_atual'], height=200)
         
-        c1, c2 = st.columns(2)
-        with c1:
-            num = st.text_input("Enviar para (DDD+Número):")
-            if st.button("📲 Enviar WhatsApp"):
-                link = f"https://wa.me/55{num}?text={quote(txt_final)}"
-                st.markdown(f"**[Clique aqui para Abrir WhatsApp]({link})**")
-        with c2:
-            st.info("Dica: Copie o texto e use a foto tirada no seu Instagram!")
+        num_destino = st.text_input("Enviar para (DDD + Número):", placeholder="17999999999")
+        if st.button("📲 Enviar via WhatsApp"):
+            if num_destino:
+                link_whatsapp = f"https://wa.me/55{num_destino}?text={quote(txt_editado)}"
+                st.markdown(f"**[CLIQUE AQUI PARA ENVIAR]({link_whatsapp})**")
+            else:
+                st.warning("Insira o número do cliente.")
 
-# --- TAB 2: GESTÃO VIP ---
-with tab2:
-    st.subheader("Cadastro de Clientes")
-    with st.form("cad_cliente"):
-        n = st.text_input("Nome do Cliente:")
-        c = st.text_input("Celular (só números):")
-        if st.form_submit_button("Salvar na Lista VIP"):
-            conn.execute("INSERT INTO vip VALUES (?, ?)", (n, c))
-            conn.commit()
-            st.success("Cliente Salvo!")
+# --- ABA 2: LISTA VIP ---
+with tab_vip:
+    st.subheader("Cadastro de Clientes VIP")
+    with st.form("novo_vip", clear_on_submit=True):
+        nome_cli = st.text_input("Nome do Cliente:")
+        cel_cli = st.text_input("WhatsApp (Só números):")
+        if st.form_submit_button("Salvar na Lista"):
+            if nome_cli and cel_cli:
+                conn.execute("INSERT INTO vip VALUES (?, ?)", (nome_cli, cel_cli))
+                conn.commit()
+                st.success("Cliente cadastrado!")
     
     st.write("---")
-    st.subheader("Sua Lista VIP")
+    st.subheader("Clientes Cadastrados")
     clientes = conn.execute("SELECT * FROM vip").fetchall()
-    for cli in clientes:
-        st.write(f"👤 {cli[0]} - {cli[1]}")
+    for c in clientes:
+        st.write(f"👤 **{c[0]}** - {c[1]}")
 
-# --- TAB 3: DATAS DE INDIAPORÃ ---
-with tab3:
+# --- ABA 3: CALENDÁRIO LOCAL ---
+with tab_agenda:
     hoje = datetime.now().strftime("%d/%m")
-    datas = {
-        "19/03": "Dia do Carpinteiro", "30/06": "Dia do Caminhoneiro",
-        "25/07": "Dia do Motorista", "13/12": "Dia do Pedreiro",
-        "15/10": "Dia do Professor"
+    datas_locais = {
+        "19/03": "Dia do Carpinteiro",
+        "25/05": "Dia do Trabalhador Rural",
+        "30/06": "Dia do Caminhoneiro",
+        "15/10": "Dia do Professor",
+        "13/12": "Dia do Pedreiro"
     }
-    st.info(f"Hoje é: {hoje}")
-    if hoje in datas:
-        st.warning(f"🔔 DATA ESPECIAL: {datas[hoje]}! Ótimo dia para promoção!")
-    else:
-        st.write("Próximas datas importantes:")
-        for d, n in datas.items():
-            st.write(f"📅 {d} - {n}")
+    
+    st.info(f"Hoje: {hoje}")
+    if hoje in datas_locais:
+        st.balloons()
+        st.success(f"🎉 HOJE É {datas_locais[hoje].upper()}! Faça uma promoção!")
+    
+    st.write("Próximas Datas para Promoções:")
+    for d, n in datas_locais.items():
+        st.write(f"📅 {d} — {n}")
+
