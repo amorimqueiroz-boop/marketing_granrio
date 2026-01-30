@@ -5,183 +5,182 @@ import pandas as pd
 from openai import OpenAI
 from urllib.parse import quote
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 import io
-import textwrap
 
-# --- 1. CONFIGURAÇÃO GERAL ---
-st.set_page_config(page_title="Gestor Granrio", page_icon="🏗️", layout="centered")
+# --- 1. CONFIGURAÇÃO ---
+st.set_page_config(page_title="Studio Granrio", page_icon="🏗️", layout="wide") # Layout wide para caber o editor
 
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
-    .stButton>button {width: 100%; border-radius: 10px; height: 3.5em; font-weight: bold; background-color: #004aad; color: white;}
-    .stTextInput>div>div>input {border-radius: 10px;}
+    .stButton>button {width: 100%; border-radius: 8px; font-weight: bold;}
+    /* Ajuste para mobile */
+    @media (max-width: 640px) {
+        .block-container {padding: 1rem;}
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. BANCO DE DADOS ---
-def init_db():
-    conn = sqlite3.connect("loja_granrio_v4.db", check_same_thread=False)
-    c = conn.cursor()
-    c.execute('CREATE TABLE IF NOT EXISTS vip (nome TEXT, celular TEXT)')
-    c.execute('CREATE TABLE IF NOT EXISTS historico (data TEXT, tipo TEXT, conteudo TEXT)')
-    conn.commit()
-    return conn
+# --- 2. BANCO DE DADOS & API ---
+conn = sqlite3.connect("loja_granrio_v5.db", check_same_thread=False)
+conn.execute('CREATE TABLE IF NOT EXISTS vip (nome TEXT, celular TEXT)')
+conn.execute('CREATE TABLE IF NOT EXISTS historico (data TEXT, tipo TEXT, conteudo TEXT)')
+conn.commit()
 
-conn = init_db()
-
-# --- 3. SERVIÇOS DE IA ---
 try:
     api_key = st.secrets["OPENAI_API_KEY"]
 except:
-    api_key = "SUA_CHAVE_AQUI"
-
+    api_key = "SUA_CHAVE_AQUI" # Configure no .streamlit/secrets.toml para produção
 client = OpenAI(api_key=api_key)
 
-# --- 4. FUNÇÕES DE DESIGN (O "MOTOR" DO CARROSSEL) ---
-def criar_imagem_com_texto(texto, subtitulo, cor_fundo, imagem_produto=None, slide_tipo="padrao"):
-    # Cria uma base quadrada (Instagram)
-    img = Image.new('RGB', (1080, 1080), color=cor_fundo)
-    draw = ImageDraw.Draw(img)
+# --- 3. MOTOR GRÁFICO (O "CANVA" EM PYTHON) ---
+def criar_design(imagem_base, texto_princ, texto_sec, tema, cor_fundo, pos_y_texto, opacidade_fundo):
+    # Base: Transforma para RGBA para permitir transparências
+    base = imagem_base.convert("RGBA")
+    largura, altura = base.size
     
-    # Tenta carregar fonte padrão, senão usa default
+    # Camada de Design (Transparente)
+    overlay = Image.new("RGBA", base.size, (255, 255, 255, 0))
+    draw = ImageDraw.Draw(overlay)
+    
+    # Fontes (Tenta carregar Arial, senão usa default)
     try:
-        font_titulo = ImageFont.truetype("arial.ttf", 90)
-        font_sub = ImageFont.truetype("arial.ttf", 50)
+        font_G = ImageFont.truetype("arial.ttf", int(altura * 0.08)) # 8% da altura
+        font_M = ImageFont.truetype("arial.ttf", int(altura * 0.05))
+        font_P = ImageFont.truetype("arial.ttf", int(altura * 0.03))
     except:
-        font_titulo = ImageFont.load_default()
-        font_sub = ImageFont.load_default()
+        font_G = ImageFont.load_default()
+        font_M = ImageFont.load_default()
+        font_P = ImageFont.load_default()
 
-    # Se tiver imagem do produto e for Slide 1 ou 3, cola ela no centro
-    if imagem_produto and slide_tipo in ["capa", "produto"]:
-        # Redimensiona mantendo proporção
-        img_prod = imagem_produto.copy()
-        img_prod.thumbnail((800, 600)) 
-        # Centraliza
-        pos_x = (1080 - img_prod.width) // 2
-        pos_y = (1080 - img_prod.height) // 2
-        img.paste(img_prod, (pos_x, pos_y))
-    
-    # Desenha Faixa de Texto (Bloco Branco Translucido para leitura)
-    if slide_tipo == "capa":
-        draw.rectangle([(50, 800), (1030, 1030)], fill="#004aad") # Faixa Azul Granrio
-        cor_texto = "white"
-        y_text = 820
-    else:
-        # Slides de texto puro ou misto
-        y_text = 100
-        cor_texto = "white"
-
-    # Quebra de linha para o texto caber
-    linhas = textwrap.wrap(texto, width=20) # Ajuste conforme o tamanho da fonte
-    
-    for linha in linhas:
-        # Centraliza o texto horizontalmente
-        # bbox retorna (left, top, right, bottom)
-        bbox = draw.textbbox((0, 0), linha, font=font_titulo)
-        w_linha = bbox[2] - bbox[0]
-        x_text = (1080 - w_linha) // 2
+    # --- TEMA 1: OFERTA RELÂMPAGO (Faixa Inferior) ---
+    if tema == "Oferta Clássica":
+        # Retângulo de Fundo do Texto
+        h_box = int(altura * 0.3) # 30% da altura
+        y_box = int((altura - h_box) * (pos_y_texto / 100)) # Posição controlada pelo Slider
         
-        # Desenha texto com borda preta para contraste (outline)
-        draw.text((x_text, y_text), linha, font=font_titulo, fill=cor_texto, stroke_width=2, stroke_fill="black")
-        y_text += 100
+        # Cor Hex para RGBA
+        c_r, c_g, c_b = tuple(int(cor_fundo.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+        draw.rectangle([(0, y_box), (largura, y_box + h_box)], fill=(c_r, c_g, c_b, int(255 * (opacidade_fundo/100))))
+        
+        # Textos
+        draw.text((largura*0.05, y_box + h_box*0.2), texto_princ, font=font_G, fill="white")
+        draw.text((largura*0.05, y_box + h_box*0.6), texto_sec, font=font_M, fill="yellow")
 
-    # Subtitulo (Preço ou Detalhe)
-    if subtitulo:
-        bbox_sub = draw.textbbox((0, 0), subtitulo, font=font_sub)
-        w_sub = bbox_sub[2] - bbox_sub[0]
-        x_sub = (1080 - w_sub) // 2
-        draw.text((x_sub, y_text + 20), subtitulo, font=font_sub, fill="yellow", stroke_width=1, stroke_fill="black")
+    # --- TEMA 2: DICA DO ESPECIALISTA (Caixa Flutuante) ---
+    elif tema == "Dica/Aviso":
+        # Caixa centralizada
+        margin = int(largura * 0.1)
+        c_r, c_g, c_b = tuple(int(cor_fundo.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+        
+        # Fundo escuro total leve
+        draw.rectangle([(0,0), (largura, altura)], fill=(0,0,0, 100))
+        
+        # Caixa de texto
+        y_centro = int(altura * (pos_y_texto / 100))
+        draw.rounded_rectangle([(margin, y_centro - 150), (largura-margin, y_centro + 150)], radius=20, fill=(c_r, c_g, c_b, 240))
+        
+        draw.text((margin+20, y_centro - 80), "GRANRIO INFORMA:", font=font_P, fill="yellow")
+        draw.text((margin+20, y_centro - 20), texto_princ, font=font_M, fill="white")
+        draw.text((margin+20, y_centro + 80), texto_sec, font=font_P, fill="white")
 
-    # Marca D'água Granrio (Rodapé)
-    draw.text((800, 1020), "@granrio.indiapora", font=font_sub, fill="white")
+    # --- TEMA 3: MINIMALISTA (Só Preço) ---
+    elif tema == "Preço Gigante":
+        # Círculo
+        raio = int(largura * 0.25)
+        centro_x = int(largura * 0.8)
+        centro_y = int(altura * (pos_y_texto / 100))
+        
+        draw.ellipse([(centro_x - raio, centro_y - raio), (centro_x + raio, centro_y + raio)], fill="#e11d48", outline="white", width=5)
+        
+        w_text = draw.textlength(texto_princ, font=font_G)
+        draw.text((centro_x - w_text/2, centro_y - 20), texto_princ, font=font_G, fill="white")
+        draw.text((centro_x - 40, centro_y + 60), "À VISTA", font=font_P, fill="white")
+
+    # Branding Fixo (Sempre aparece)
+    draw.text((20, altura - 40), "🏗️ Granrio Indiaporã", font=font_P, fill="white", stroke_width=2, stroke_fill="black")
+
+    # Compõe a imagem final
+    img_final = Image.alpha_composite(base, overlay)
+    return img_final.convert("RGB")
+
+# --- 4. INTERFACE ---
+st.title("🏗️ Studio Granrio")
+st.write("Crie designs profissionais para a loja em segundos.")
+
+col_editor, col_preview = st.columns([1, 1.5]) # Coluna esquerda controles, direita imagem
+
+with col_editor:
+    st.subheader("1. Imagem & Conteúdo")
     
-    return img
-
-def encode_image(image_file):
-    return base64.b64encode(image_file.getvalue()).decode('utf-8')
-
-# --- 5. PROMPT DO CARROSSEL ---
-PERSONA_CARROSSEL = """
-Você é um designer e copywriter.
-Analise a imagem do produto e crie textos curtos para 4 slides de Instagram.
-Responda APENAS no formato:
-SLIDE1: [Título curto e impactante]
-SLIDE2: [Uma pergunta de dor/problema que o produto resolve]
-SLIDE3: [Principais benefícios resumidos]
-SLIDE4: [Chamada para ação com urgência]
-"""
-
-# --- 6. INTERFACE ---
-st.title("🏗️ Gestor Granrio")
-tab_post, tab_carrossel, tab_vip, tab_agenda = st.tabs(["📸 Post Rápido", "🎞️ Carrossel (Novo)", "👥 VIP", "📅 Agenda"])
-
-# --- ABA 1 (Mantida Simples) ---
-with tab_post:
-    st.write("Post Simples (Código anterior...)") 
-
-# --- ABA 2: CARROSSEL AUTOMÁTICO (NOVIDADE) ---
-with tab_carrossel:
-    st.header("Gerador de Carrossel (4 Slides)")
-    st.info("Cria uma sequência completa para o Instagram automaticamente.")
+    # Opção: Câmera ou Upload
+    modo_foto = st.radio("Origem da Imagem:", ["📸 Câmera", "📁 Galeria/Upload"], horizontal=True)
+    if modo_foto == "📸 Câmera":
+        arquivo_img = st.camera_input("Tirar Foto")
+    else:
+        arquivo_img = st.file_uploader("Escolher foto", type=['jpg', 'png'])
+        
+    st.write("---")
+    st.subheader("2. Personalização")
     
-    foto_c = st.camera_input("Foto para o Carrossel", key="cam_carrossel")
-    preco_c = st.text_input("Preço:", placeholder="R$ 0,00", key="preco_c")
+    # Controles do "Canva"
+    tema_selecionado = st.selectbox("Estilo do Design:", ["Oferta Clássica", "Dica/Aviso", "Preço Gigante"])
     
-    if foto_c and st.button("🎨 Criar Carrossel"):
-        # 1. Analisar com GPT-4o para pegar os textos
-        with st.spinner('A IA está escrevendo o roteiro dos slides...'):
-            img_bytes = foto_c.getvalue()
-            img_pil = Image.open(io.BytesIO(img_bytes))
-            img_b64 = base64.b64encode(img_bytes).decode('utf-8')
-            
-            res = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": PERSONA_CARROSSEL},
-                    {"role": "user", "content": [
-                        {"type": "text", "text": f"Produto custa {preco_c}. Crie os textos."},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-                    ]}
-                ]
-            )
-            roteiro = res.choices[0].message.content
-            
-            # 2. Processar o texto da IA (Parse simples)
-            linhas_ia = roteiro.split('\n')
-            textos = {"SLIDE1": "", "SLIDE2": "", "SLIDE3": "", "SLIDE4": ""}
-            for l in linhas_ia:
-                if "SLIDE1:" in l: textos["SLIDE1"] = l.replace("SLIDE1:", "").strip()
-                if "SLIDE2:" in l: textos["SLIDE2"] = l.replace("SLIDE2:", "").strip()
-                if "SLIDE3:" in l: textos["SLIDE3"] = l.replace("SLIDE3:", "").strip()
-                if "SLIDE4:" in l: textos["SLIDE4"] = l.replace("SLIDE4:", "").strip()
+    txt_principal = st.text_input("Texto Principal (Título/Preço):", value="OFERTA R$ 49,90")
+    txt_secundario = st.text_input("Texto Secundário (Detalhe):", value="Cimento CP-II 50kg")
+    
+    with st.expander("🎨 Ajustes Finos (Cores e Posição)"):
+        cor_tema = st.color_picker("Cor do Elemento:", "#004aad") # Azul Granrio padrão
+        posicao_y = st.slider("Posição Vertical:", 0, 100, 80) # 80% é rodapé
+        opacidade = st.slider("Transparência do Fundo:", 50, 100, 90)
 
-        # 3. Gerar as Imagens com Python (Pillow)
-        with st.spinner('Gerando as imagens...'):
-            # Slide 1: Capa (Azul Escuro)
-            img1 = criar_imagem_com_texto(textos["SLIDE1"], "Confira a Oferta!", "#0f172a", img_pil, "capa")
-            # Slide 2: Problema (Laranja Atenção)
-            img2 = criar_imagem_com_texto(textos["SLIDE2"], "Você passa por isso?", "#ea580c", None, "texto")
-            # Slide 3: Solução (Azul Claro)
-            img3 = criar_imagem_com_texto(textos["SLIDE3"], f"Só: {preco_c}", "#0284c7", img_pil, "produto")
-            # Slide 4: CTA (Verde Zap)
-            img4 = criar_imagem_com_texto("Peça Agora no WhatsApp!", textos["SLIDE4"], "#16a34a", None, "texto")
-            
-            # Salvar em sessão para exibir
-            st.session_state['carrossel_imgs'] = [img1, img2, img3, img4]
-            st.success("Carrossel Pronto!")
-
-    # Exibição
-    if 'carrossel_imgs' in st.session_state:
-        cols = st.columns(2)
-        for i, img in enumerate(st.session_state['carrossel_imgs']):
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            with cols[i % 2]:
-                st.image(img, caption=f"Slide {i+1}", use_column_width=True)
-                st.download_button(label=f"⬇️ Baixar Slide {i+1}", data=buf.getvalue(), file_name=f"slide_{i+1}.png", mime="image/png")
-
-# --- RESTO DAS ABAS (MANTIDAS) ---
-with tab_agenda: st.write("Agenda Inteligente...")
-with tab_vip: st.write("Lista VIP...")
+with col_preview:
+    st.subheader("👁️ Visualização em Tempo Real")
+    
+    if arquivo_img:
+        # Carrega imagem
+        img_pil = Image.open(arquivo_img)
+        # Redimensiona para agilizar processamento e padronizar
+        img_pil.thumbnail((800, 800))
+        
+        # CHAMA O MOTOR GRÁFICO
+        # O segredo: Isso roda toda vez que ela mexe num slider
+        imagem_pronta = criar_design(img_pil, txt_principal, txt_secundario, tema_selecionado, cor_tema, posicao_y, opacidade)
+        
+        # Mostra Imagem
+        st.image(imagem_pronta, use_column_width=True, caption="Design Gerado Automaticamente")
+        
+        # Botões de Ação
+        buf = io.BytesIO()
+        imagem_pronta.save(buf, format="PNG")
+        btn = st.download_button(
+            label="⬇️ Baixar Imagem HD",
+            data=buf.getvalue(),
+            file_name="post_granrio.png",
+            mime="image/png"
+        )
+        
+        # Botão Inteligente: Gerar Legenda com IA baseada na imagem final
+        if st.button("✨ Gerar Legenda para este Design"):
+            with st.spinner("GPT-4o está escrevendo..."):
+                # Codifica a imagem final (com texto e tudo) para a IA ver
+                img_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+                res = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "Você é o marketing da Granrio. Crie uma legenda curta para Instagram baseada nesta imagem."},
+                        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}]}
+                    ]
+                )
+                st.info(res.choices[0].message.content)
+                st.write("Copie o texto acima 👆")
+                
+    else:
+        # Placeholder bonito enquanto não tem foto
+        st.info("👈 Tire uma foto ou faça upload para começar a editar.")
+        st.markdown("""
+            <div style="background-color:#eee; height:300px; display:flex; align-items:center; justify-content:center; border-radius:10px; color:#aaa;">
+                Pré-visualização aparecerá aqui
+            </div>
+        """, unsafe_allow_html=True)
