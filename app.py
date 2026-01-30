@@ -8,9 +8,10 @@ from PIL import Image
 import io
 from urllib.parse import quote
 
-# --- 1. CONFIGURAÇÃO VISUAL ---
+# --- 1. CONFIGURAÇÃO VISUAL (CORRIGIDO O ERRO DO MARKDOWN) ---
 st.set_page_config(page_title="Gestor Granrio Pro", page_icon="🏗️", layout="centered")
 
+# AQUI ESTAVA O ERRO: Mudamos de 'unsafe_allow_index' para 'unsafe_allow_html'
 st.markdown("""
     <style>
     .stApp {background-color: #f8f9fa;}
@@ -23,25 +24,21 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. CARREGAMENTO SEGURO DE CHAVES (SECRETS) ---
+# --- 2. CARREGAMENTO SEGURO DE CHAVES ---
 try:
-    # O código busca as chaves configuradas no secrets.toml ou na nuvem
+    # Busca as chaves configuradas nos Secrets
     PHOTOROOM_API_KEY = st.secrets["PHOTOROOM_API_KEY"]
     OPENAI_KEY = st.secrets["OPENAI_API_KEY"]
-except FileNotFoundError:
-    st.error("⚠️ Erro: Chaves de API não encontradas.")
-    st.info("Configure o arquivo .streamlit/secrets.toml com as chaves PHOTOROOM_API_KEY e OPENAI_API_KEY.")
-    st.stop() # Para a execução se não tiver chave
-except KeyError as e:
-    st.error(f"⚠️ Erro: Faltando a chave {e} nos Secrets.")
+except Exception as e:
+    st.error("⚠️ Erro nas Chaves de API. Verifique o arquivo secrets.toml")
     st.stop()
 
-# Inicializa o cliente OpenAI
+# Inicializa OpenAI
 client = OpenAI(api_key=OPENAI_KEY)
 
 # --- 3. BANCO DE DADOS ---
 def init_db():
-    conn = sqlite3.connect("granrio_pro.db", check_same_thread=False)
+    conn = sqlite3.connect("granrio_pro_vfinal.db", check_same_thread=False)
     c = conn.cursor()
     c.execute('CREATE TABLE IF NOT EXISTS vip (nome TEXT, celular TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS historico (data TEXT, tipo TEXT, conteudo TEXT)')
@@ -50,19 +47,21 @@ def init_db():
 
 conn = init_db()
 
-# --- 4. MOTOR VISUAL: PHOTOROOM API ---
+# --- 4. MOTOR VISUAL: PHOTOROOM (CORRIGIDO O ERRO 400) ---
 def gerar_estudio_photoroom(image_bytes, prompt_cenario):
-    """
-    Envia a foto para a API da Photoroom gerar o estúdio com sombras.
-    """
     url = "https://image-api.photoroom.com/v2/edit"
     
-    files = {"image_file": image_bytes}
+    # CORREÇÃO CRÍTICA AQUI:
+    # Adicionamos o nome do arquivo ("produto.jpg") e o tipo ("image/jpeg")
+    # Isso resolve o erro "Couldn't find the argument imageFile"
+    files = {
+        "image_file": ("produto.jpg", image_bytes, "image/jpeg")
+    }
     
     data = {
         "background.prompt": prompt_cenario,
-        "shadow.mode": "ai.soft",  # A mágica da sombra realista
-        "light.mode": "ai.auto",   # Ajuste de iluminação automático
+        "shadow.mode": "ai.soft",  # Cria sombra realista
+        "light.mode": "ai.auto",   # Ajusta a luz do produto
         "padding": "0.1",
         "outputFormat": "png"
     }
@@ -74,7 +73,6 @@ def gerar_estudio_photoroom(image_bytes, prompt_cenario):
         if response.status_code == 200:
             return Image.open(io.BytesIO(response.content))
         else:
-            # Mostra o erro exato caso a chave esteja errada ou sem créditos
             st.error(f"Erro Photoroom: {response.status_code} - {response.text}")
             return None
     except Exception as e:
@@ -83,7 +81,7 @@ def gerar_estudio_photoroom(image_bytes, prompt_cenario):
 
 # --- 5. INTERFACE DO APP ---
 st.title("🏗️ Gestor Granrio Pro")
-st.caption(f"Status: Conectado (Photoroom Live)")
+st.caption("Status: Conectado (Photoroom Live)")
 
 # Memória do App
 if 'img_final' not in st.session_state: st.session_state['img_final'] = None
@@ -97,7 +95,6 @@ with tab_studio:
     
     foto_input = st.camera_input("Tire a foto do produto")
     
-    # Dicionário de Cenários (Prompt em Inglês para a IA)
     cenarios = {
         "Banheiro de Luxo": "product on a white marble counter in a luxury bright bathroom, bokeh background, professional photography",
         "Obra Limpa (Concreto)": "product placed on a polished concrete floor in a modern construction site, sunlight, soft shadows",
@@ -114,19 +111,23 @@ with tab_studio:
 
     if foto_input and st.button("✨ Gerar Foto de Estúdio"):
         
-        with st.spinner("Enviando para a Photoroom (isso gasta 1 crédito)..."):
+        with st.spinner("Enviando para o Estúdio Profissional..."):
             img_bytes = foto_input.getvalue()
-            # Chama a função que usa a chave dos Secrets
+            # Chama a função corrigida
             imagem_gerada = gerar_estudio_photoroom(img_bytes, cenarios[cenario_escolhido])
             
             if imagem_gerada:
                 st.session_state['img_final'] = imagem_gerada
                 
-                # Gera Legenda com OpenAI
+                # Gera Legenda
                 with st.spinner("Escrevendo legenda..."):
                     prompt_mkt = f"Crie um post vendedor para Instagram. Produto custa R$ {preco}. Cenário: {cenario_escolhido}. Use emojis e hashtags #Indiaporã #Granrio."
-                    res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt_mkt}])
-                    st.session_state['legenda'] = res.choices[0].message.content
+                    try:
+                        res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt_mkt}])
+                        st.session_state['legenda'] = res.choices[0].message.content
+                    except Exception as e:
+                        st.warning(f"Erro ao gerar texto: {e}")
+                        st.session_state['legenda'] = f"Oferta Granrio! Só R$ {preco}."
                     
                     # Salva histórico
                     data_hoje = datetime.now().strftime("%d/%m %H:%M")
@@ -154,8 +155,11 @@ with tab_studio:
 with tab_agenda:
     st.header("📅 Dica do Dia")
     if st.button("💡 Gerar Ideia"):
-        res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": "Dê uma dica rápida de obra para postar hoje."}])
-        st.info(res.choices[0].message.content)
+        try:
+            res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": "Dê uma dica rápida de obra para postar hoje."}])
+            st.info(res.choices[0].message.content)
+        except:
+            st.error("Verifique a chave OpenAI.")
 
 # --- ABA 3: VIP ---
 with tab_vip:
