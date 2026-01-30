@@ -1,159 +1,173 @@
 import streamlit as st
+import requests
 import sqlite3
-import base64
+import pandas as pd
 from openai import OpenAI
-from urllib.parse import quote
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageFont
-from rembg import remove
+from PIL import Image
 import io
+from urllib.parse import quote
 
-# --- 1. CONFIGURAÇÃO E CORREÇÃO DO ERRO ---
-st.set_page_config(page_title="Gestor Granrio", page_icon="🏗️", layout="centered")
+# --- 1. CONFIGURAÇÃO VISUAL ---
+st.set_page_config(page_title="Gestor Granrio Pro", page_icon="🏗️", layout="centered")
 
-# CORREÇÃO AQUI: unsafe_allow_html=True
 st.markdown("""
     <style>
     .stApp {background-color: #f8f9fa;}
     .stButton>button {
-        width: 100%; border-radius: 8px; height: 3em; 
+        width: 100%; border-radius: 12px; height: 3.5em; 
         font-weight: bold; background-color: #004aad; color: white; border: none;
     }
-    div[data-testid="stButton"] > button[kind="secondary"] {
-        background-color: #dc2626 !important; color: white !important;
-    }
+    .stTextInput>div>div>input {border-radius: 10px;}
+    img {border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);}
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. BANCO DE DADOS ---
+# --- 2. CARREGAMENTO SEGURO DE CHAVES (SECRETS) ---
+try:
+    # O código busca as chaves configuradas no secrets.toml ou na nuvem
+    PHOTOROOM_API_KEY = st.secrets["PHOTOROOM_API_KEY"]
+    OPENAI_KEY = st.secrets["OPENAI_API_KEY"]
+except FileNotFoundError:
+    st.error("⚠️ Erro: Chaves de API não encontradas.")
+    st.info("Configure o arquivo .streamlit/secrets.toml com as chaves PHOTOROOM_API_KEY e OPENAI_API_KEY.")
+    st.stop() # Para a execução se não tiver chave
+except KeyError as e:
+    st.error(f"⚠️ Erro: Faltando a chave {e} nos Secrets.")
+    st.stop()
+
+# Inicializa o cliente OpenAI
+client = OpenAI(api_key=OPENAI_KEY)
+
+# --- 3. BANCO DE DADOS ---
 def init_db():
-    conn = sqlite3.connect("granrio_final.db", check_same_thread=False)
+    conn = sqlite3.connect("granrio_pro.db", check_same_thread=False)
     c = conn.cursor()
     c.execute('CREATE TABLE IF NOT EXISTS vip (nome TEXT, celular TEXT)')
+    c.execute('CREATE TABLE IF NOT EXISTS historico (data TEXT, tipo TEXT, conteudo TEXT)')
     conn.commit()
     return conn
 
 conn = init_db()
 
-# --- 3. CONFIGURAÇÃO API (OPENAI É MAIS ESTÁVEL PARA TEXTO) ---
-try:
-    # Tenta pegar dos segredos ou usa uma chave temporária se estiver testando local
-    api_key = st.secrets.get("OPENAI_API_KEY", "SUA_CHAVE_AQUI")
-except:
-    api_key = "SUA_CHAVE_AQUI"
-client = OpenAI(api_key=api_key)
-
-# --- 4. MOTOR DE DESIGN GRÁFICO (O "CANVA" AUTOMÁTICO) ---
-def criar_card_oferta(foto_upload, preco, nome_prod, usar_recorte, cor_fundo):
-    # 1. Prepara a imagem base
-    img = Image.open(foto_upload).convert("RGBA")
+# --- 4. MOTOR VISUAL: PHOTOROOM API ---
+def gerar_estudio_photoroom(image_bytes, prompt_cenario):
+    """
+    Envia a foto para a API da Photoroom gerar o estúdio com sombras.
+    """
+    url = "https://image-api.photoroom.com/v2/edit"
     
-    # 2. Recorte Inteligente (Opcional)
-    if usar_recorte:
-        with st.spinner("✂️ Recortando fundo..."):
-            img = remove(img)
+    files = {"image_file": image_bytes}
     
-    # 3. Cria o Fundo do Card (Quadrado Instagram 1080x1080)
-    card = Image.new("RGBA", (1080, 1080), color=cor_fundo)
+    data = {
+        "background.prompt": prompt_cenario,
+        "shadow.mode": "ai.soft",  # A mágica da sombra realista
+        "light.mode": "ai.auto",   # Ajuste de iluminação automático
+        "padding": "0.1",
+        "outputFormat": "png"
+    }
     
-    # 4. Posiciona o Produto
-    # Ajusta tamanho para caber no centro
-    img.thumbnail((900, 800)) 
-    largura_img, altura_img = img.size
-    pos_x = (1080 - largura_img) // 2
-    pos_y = (1080 - altura_img) // 2
-    
-    # Se for fundo transparente (recorte), adiciona uma sombra fake simples para dar "peso"
-    if usar_recorte:
-        sombra = Image.new("RGBA", (largura_img, int(altura_img*0.1)), (0,0,0, 50))
-        # card.paste(sombra, (pos_x, pos_y + altura_img - 20), sombra) # Sombra simples
-    
-    card.paste(img, (pos_x, pos_y), img)
-    
-    # 5. Elementos Gráficos (Faixas e Textos)
-    draw = ImageDraw.Draw(card)
+    headers = {"x-api-key": PHOTOROOM_API_KEY}
     
     try:
-        font_preco = ImageFont.truetype("arial.ttf", 140)
-        font_titulo = ImageFont.truetype("arial.ttf", 70)
-        font_footer = ImageFont.truetype("arial.ttf", 40)
-    except:
-        font_preco = ImageFont.load_default()
-        font_titulo = ImageFont.load_default()
-        font_footer = ImageFont.load_default()
-    
-    # Faixa Superior (Nome do Produto)
-    draw.rectangle([(0, 0), (1080, 180)], fill="#004aad") # Azul Granrio
-    w_tit = draw.textlength(nome_prod, font=font_titulo)
-    draw.text(((1080-w_tit)/2, 60), nome_prod, font=font_titulo, fill="white")
-    
-    # Preço (Bola ou Faixa)
-    # Vamos fazer uma "Etiqueta" no canto inferior direito
-    draw.rounded_rectangle([(650, 850), (1030, 1030)], radius=20, fill="#dc2626", outline="white", width=5)
-    
-    draw.text((690, 880), "R$", font=font_footer, fill="white")
-    draw.text((750, 890), preco, font=font_preco, fill="white")
-    draw.text((780, 1000), "à vista", font=font_footer, fill="yellow")
-
-    # Rodapé
-    draw.rectangle([(0, 1030), (1080, 1080)], fill="white")
-    draw.text((350, 1040), "🏗️ Granrio Indiaporã • (17) 99999-9999", font=font_footer, fill="#004aad")
-
-    return card
+        response = requests.post(url, headers=headers, files=files, data=data)
+        if response.status_code == 200:
+            return Image.open(io.BytesIO(response.content))
+        else:
+            # Mostra o erro exato caso a chave esteja errada ou sem créditos
+            st.error(f"Erro Photoroom: {response.status_code} - {response.text}")
+            return None
+    except Exception as e:
+        st.error(f"Erro de conexão: {e}")
+        return None
 
 # --- 5. INTERFACE DO APP ---
-st.title("🏗️ Criador de Encartes Granrio")
-st.write("Crie posts profissionais sem montagens falsas.")
+st.title("🏗️ Gestor Granrio Pro")
+st.caption(f"Status: Conectado (Photoroom Live)")
 
-tab_criador, tab_vip = st.tabs(["🎨 Criar Arte", "👥 Clientes"])
+# Memória do App
+if 'img_final' not in st.session_state: st.session_state['img_final'] = None
+if 'legenda' not in st.session_state: st.session_state['legenda'] = ""
 
-with tab_criador:
-    # Upload ou Câmera
-    opcao_foto = st.radio("Foto do Produto:", ["📸 Câmera", "📁 Upload"], horizontal=True)
-    if opcao_foto == "📸 Câmera":
-        arquivo = st.camera_input("Tirar Foto")
-    else:
-        arquivo = st.file_uploader("Escolher Imagem", type=["jpg", "png"])
+tab_studio, tab_agenda, tab_vip, tab_hist = st.tabs(["📸 Studio Pro", "📅 Agenda", "👥 VIP", "📊 Controle"])
+
+# --- ABA 1: STUDIO PRO ---
+with tab_studio:
+    st.subheader("Transformar Foto com IA")
     
-    st.write("---")
+    foto_input = st.camera_input("Tire a foto do produto")
+    
+    # Dicionário de Cenários (Prompt em Inglês para a IA)
+    cenarios = {
+        "Banheiro de Luxo": "product on a white marble counter in a luxury bright bathroom, bokeh background, professional photography",
+        "Obra Limpa (Concreto)": "product placed on a polished concrete floor in a modern construction site, sunlight, soft shadows",
+        "Madeira Rústica": "product on a rustic wooden table, warm lighting, blurred background",
+        "Cozinha Moderna": "product on a granite kitchen island, modern appliances in background blurred",
+        "Fundo Infinito Azul": "product on a professional dark blue studio background, spotlight, minimalist"
+    }
     
     col1, col2 = st.columns(2)
     with col1:
-        nome_prod = st.text_input("Nome do Produto:", value="Cimento CP-II")
-        preco_prod = st.text_input("Preço (Só números):", value="32,90")
-    
+        cenario_escolhido = st.selectbox("Cenário:", list(cenarios.keys()))
     with col2:
-        # Opções de Design Sólido
-        cor_nome = st.selectbox("Cor de Fundo do Card:", 
-                                ["Branco Limpo", "Azul Granrio Suave", "Cinza Concreto", "Laranja Oferta"])
-        recortar = st.checkbox("Recortar Fundo (Remover cenário da loja)?", value=True)
+        preco = st.text_input("Preço (R$):", value="99,90")
 
-    # Mapa de cores
-    cores = {
-        "Branco Limpo": "#ffffff",
-        "Azul Granrio Suave": "#bfdbfe",
-        "Cinza Concreto": "#e5e7eb",
-        "Laranja Oferta": "#ffedd5"
-    }
+    if foto_input and st.button("✨ Gerar Foto de Estúdio"):
+        
+        with st.spinner("Enviando para a Photoroom (isso gasta 1 crédito)..."):
+            img_bytes = foto_input.getvalue()
+            # Chama a função que usa a chave dos Secrets
+            imagem_gerada = gerar_estudio_photoroom(img_bytes, cenarios[cenario_escolhido])
+            
+            if imagem_gerada:
+                st.session_state['img_final'] = imagem_gerada
+                
+                # Gera Legenda com OpenAI
+                with st.spinner("Escrevendo legenda..."):
+                    prompt_mkt = f"Crie um post vendedor para Instagram. Produto custa R$ {preco}. Cenário: {cenario_escolhido}. Use emojis e hashtags #Indiaporã #Granrio."
+                    res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt_mkt}])
+                    st.session_state['legenda'] = res.choices[0].message.content
+                    
+                    # Salva histórico
+                    data_hoje = datetime.now().strftime("%d/%m %H:%M")
+                    conn.execute("INSERT INTO historico VALUES (?, ?, ?)", (data_hoje, "Studio Pro", st.session_state['legenda']))
+                    conn.commit()
 
-    if arquivo and st.button("✨ GERAR ENCARTE INSTAGRAM"):
-        img_final = criar_card_oferta(arquivo, preco_prod, nome_prod, recortar, cores[cor_nome])
+    # Resultado
+    if st.session_state['img_final']:
+        st.write("---")
+        st.image(st.session_state['img_final'], caption="Resultado Profissional", use_column_width=True)
         
-        # Exibe resultado
-        st.image(img_final, caption="Pronto para Postar!", use_column_width=True)
-        
-        # Botão Download
         buf = io.BytesIO()
-        img_final.save(buf, format="PNG")
-        st.download_button("⬇️ Baixar Imagem HD", data=buf.getvalue(), file_name="encarte_granrio.png", mime="image/png")
+        st.session_state['img_final'].save(buf, format="PNG")
+        st.download_button("⬇️ Baixar Imagem", data=buf.getvalue(), file_name="granrio_pro.png", mime="image/png")
         
-        # Gera Legenda com IA
-        with st.spinner("✍️ Criando legenda..."):
-            prompt = f"Crie uma legenda de venda para Instagram. Produto: {nome_prod}. Preço: {preco_prod}. Loja: Granrio Material de Construção (Indiaporã). Use emojis de obra."
-            res = client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}])
-            st.text_area("Copie a legenda:", value=res.choices[0].message.content)
+        txt_editavel = st.text_area("Legenda:", value=st.session_state['legenda'], height=150)
+        
+        zap = st.text_input("Enviar para (DDD+Número):", key="zap_final")
+        if st.button("📲 Enviar no WhatsApp"):
+            if zap:
+                link = f"https://wa.me/55{zap}?text={quote(txt_editavel)}"
+                st.markdown(f"[>> ABRIR WHATSAPP <<]({link})")
 
+# --- ABA 2: AGENDA ---
+with tab_agenda:
+    st.header("📅 Dica do Dia")
+    if st.button("💡 Gerar Ideia"):
+        res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": "Dê uma dica rápida de obra para postar hoje."}])
+        st.info(res.choices[0].message.content)
+
+# --- ABA 3: VIP ---
 with tab_vip:
-    st.write("Gestão de Clientes (Código anterior mantido aqui...)")
-    # (Pode colar o código do banco de dados das respostas anteriores aqui se quiser manter)
+    st.header("👥 Clientes")
+    with st.form("vip"):
+        n = st.text_input("Nome"); c = st.text_input("Celular")
+        if st.form_submit_button("Salvar"):
+            conn.execute("INSERT INTO vip VALUES (?, ?)", (n, c)); conn.commit(); st.rerun()
+    st.dataframe(pd.read_sql_query("SELECT * FROM vip", conn), use_container_width=True)
 
+# --- ABA 4: CONTROLE ---
+with tab_hist:
+    st.header("📊 Histórico")
+    if st.button("Atualizar"): st.rerun()
+    st.dataframe(pd.read_sql_query("SELECT * FROM historico ORDER BY data DESC", conn), use_container_width=True)
